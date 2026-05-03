@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - Harbor is provided by the benchmark runt
 
 class AgentPlaneInstalledAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     executor: ExecutorSpec
+    codex_optional_dependency = "@openai/codex-linux-x64"
     node_setup_command = (
         "set -euo pipefail; "
         "if command -v node >/dev/null 2>&1 && "
@@ -41,7 +42,16 @@ class AgentPlaneInstalledAgent(BaseInstalledAgent):  # type: ignore[misc,valid-t
                 "set -euo pipefail; "
                 "git config --global user.name 'AgentPlane Harbor'; "
                 "git config --global user.email 'agentplane-harbor@example.invalid'; "
-                f"npm install -g agentplane {self.executor.npm_package}; "
+                f"npm install -g --include=optional agentplane {self.executor.npm_package}; "
+                "if [ "
+                f"\"{self.executor.npm_package}\" = \"@openai/codex\" "
+                "] && ! node -e "
+                "\"import('@openai/codex-linux-x64')"
+                ".then(()=>process.exit(0))"
+                ".catch(()=>process.exit(1))\"; "
+                "then "
+                f"npm install -g {self.codex_optional_dependency}; "
+                "fi; "
                 f"test -n \"${{{self.executor.api_key_env}:-}}\"; "
                 f"printenv {self.executor.api_key_env} | codex login --with-api-key; "
                 "agentplane --version"
