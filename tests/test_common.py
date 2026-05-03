@@ -63,13 +63,16 @@ def test_render_agentplane_command_has_runner_evaluator_repair_loop() -> None:
     command = render_agentplane_command("fix the task", executor, "provider/model")
 
     assert "run_evaluator()" in command
-    assert "for ATTEMPT in $(seq 1 5)" in command
+    assert 'REPAIR_ATTEMPTS="${AGENTPLANE_REPAIR_ATTEMPTS:-3}"' in command
+    assert 'for ATTEMPT in $(seq 1 "$REPAIR_ATTEMPTS")' in command
     assert "executor-attempt-${ATTEMPT}.log" in command
     assert "evaluator-feedback.txt" in command
     assert "--rework" in command
     assert "Evaluator rejected attempt $ATTEMPT" in command
     assert "Do not read or run hidden graders in /tests" in command
     assert "Previous attempt failed the local evaluator" in command
+    assert "does not look like a real MIPS/ELF interpreter" in command
+    assert "appears to be a scaffold or fake frame generator" in command
 
 
 def test_render_proof_collection_command_records_integrity_flags() -> None:

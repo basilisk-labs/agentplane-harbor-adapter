@@ -14,6 +14,7 @@ ENV_MODEL="${MODEL:-}"
 ENV_N="${N:-}"
 ENV_N_CONCURRENT="${N_CONCURRENT:-}"
 ENV_AGENT_SETUP_TIMEOUT_MULTIPLIER="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-}"
+ENV_REPAIR_ATTEMPTS="${REPAIR_ATTEMPTS:-}"
 ENV_HARBOR_BIN="${HARBOR_BIN:-}"
 ENV_TB_BIN="${TB_BIN:-}"
 
@@ -33,6 +34,7 @@ MODEL="${ENV_MODEL:-${MODEL:-}}"
 N="${ENV_N:-${N:-}}"
 N_CONCURRENT="${ENV_N_CONCURRENT:-${N_CONCURRENT:-}}"
 AGENT_SETUP_TIMEOUT_MULTIPLIER="${ENV_AGENT_SETUP_TIMEOUT_MULTIPLIER:-${AGENT_SETUP_TIMEOUT_MULTIPLIER:-}}"
+REPAIR_ATTEMPTS="${ENV_REPAIR_ATTEMPTS:-${REPAIR_ATTEMPTS:-}}"
 HARBOR_BIN="${ENV_HARBOR_BIN:-${HARBOR_BIN:-}}"
 TB_BIN="${ENV_TB_BIN:-${TB_BIN:-}}"
 
@@ -42,6 +44,7 @@ LEADERBOARD_DATASET="${LEADERBOARD_DATASET:-terminal-bench-core==0.1.1}"
 N="${N:-1}"
 N_CONCURRENT="${N_CONCURRENT:-1}"
 AGENT_SETUP_TIMEOUT_MULTIPLIER="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-3}"
+REPAIR_ATTEMPTS="${REPAIR_ATTEMPTS:-3}"
 HARBOR_BIN="${HARBOR_BIN:-harbor}"
 TB_BIN="${TB_BIN:-tb}"
 
@@ -67,6 +70,7 @@ Environment:
   N_CONCURRENT         Default: 1.
   AGENT_SETUP_TIMEOUT_MULTIPLIER
                        Default: 3. Passed to Harbor agent setup timeout.
+  REPAIR_ATTEMPTS      Default: 3. AgentPlane runner/evaluator repair attempts.
   HARBOR_BIN           Default: harbor. Can be "uvx harbor".
   TB_BIN               Default: tb. Can be "uvx terminal-bench".
 EOF
@@ -106,6 +110,10 @@ openai_agent_env_flag() {
   printf -- "--agent-env OPENAI_API_KEY=%q" "$OPENAI_API_KEY"
 }
 
+repair_attempts_agent_env_flag() {
+  printf -- "--agent-env AGENTPLANE_REPAIR_ATTEMPTS=%q" "$REPAIR_ATTEMPTS"
+}
+
 case "${1:-}" in
   setup)
     run_cmd uv venv
@@ -137,12 +145,14 @@ case "${1:-}" in
     require_openai_key
     redacted_openai_agent_env="--agent-env OPENAI_API_KEY=***"
     openai_agent_env="$(openai_agent_env_flag)"
+    repair_attempts_agent_env="$(repair_attempts_agent_env_flag)"
     run_shell_redacted "$HARBOR_BIN run \
       -d '$DATASET' \
       --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
       -m '$MODEL' \
       --env-file .env.local \
       $redacted_openai_agent_env \
+      --agent-env AGENTPLANE_REPAIR_ATTEMPTS='$REPAIR_ATTEMPTS' \
       --artifact /app/.agentplane-harbor \
       --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT' \
@@ -152,6 +162,7 @@ case "${1:-}" in
       -m '$MODEL' \
       --env-file .env.local \
       $openai_agent_env \
+      $repair_attempts_agent_env \
       --artifact /app/.agentplane-harbor \
       --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT' \
@@ -165,12 +176,14 @@ case "${1:-}" in
     fi
     redacted_openai_agent_env="--agent-env OPENAI_API_KEY=***"
     openai_agent_env="$(openai_agent_env_flag)"
+    repair_attempts_agent_env="$(repair_attempts_agent_env_flag)"
     run_shell_redacted "$HARBOR_BIN run \
       -d '$DATASET' \
       --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
       -m '$MODEL' \
       --env-file .env.local \
       $redacted_openai_agent_env \
+      --agent-env AGENTPLANE_REPAIR_ATTEMPTS='$REPAIR_ATTEMPTS' \
       --artifact /app/.agentplane-harbor \
       --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT'" "$HARBOR_BIN run \
@@ -179,6 +192,7 @@ case "${1:-}" in
       -m '$MODEL' \
       --env-file .env.local \
       $openai_agent_env \
+      $repair_attempts_agent_env \
       --artifact /app/.agentplane-harbor \
       --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT'"

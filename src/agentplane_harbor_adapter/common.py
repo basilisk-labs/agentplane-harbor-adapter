@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-MAX_REPAIR_ATTEMPTS = 5
+DEFAULT_REPAIR_ATTEMPTS = 3
 
 GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
     """
@@ -230,6 +230,27 @@ def render_agentplane_command(
               echo "FAIL: vm.js is missing." > "$feedback"
               return 1
             fi
+            local vm_static_check
+            vm_static_check="$(grep -Eic \
+              'doomgeneric_mips|readUInt|DataView|syscall|register|opcode|pc|elf|writeFileSync' \
+              vm.js 2>/dev/null || true)"
+            if [ "$vm_static_check" -lt 6 ]; then
+              {{
+                echo "FAIL: vm.js does not look like a real MIPS/ELF interpreter."
+                echo "Expected code to load doomgeneric_mips and implement CPU/syscall/file"
+                echo "behavior."
+                echo "Static interpreter signal count: $vm_static_check"
+              }} > "$feedback"
+              return 1
+            fi
+            if grep -Eiq 'scaffold|stand[- ]?in|fake|placeholder|deterministic.*frame|gradient' \
+              vm.js 2>/dev/null; then
+              {{
+                echo "FAIL: vm.js appears to be a scaffold or fake frame generator."
+                echo "Implement a real interpreter path instead of fabricating a frame."
+              }} > "$feedback"
+              return 1
+            fi
             set +e
             timeout 45s node vm.js > "$log" 2>&1
             local vm_status="$?"
@@ -271,9 +292,14 @@ def render_agentplane_command(
           return 0
         }}
 
+        REPAIR_ATTEMPTS="${{AGENTPLANE_REPAIR_ATTEMPTS:-{DEFAULT_REPAIR_ATTEMPTS}}}"
+        if ! printf '%s' "$REPAIR_ATTEMPTS" | grep -Eq '^[1-9][0-9]*$'; then
+          REPAIR_ATTEMPTS="{DEFAULT_REPAIR_ATTEMPTS}"
+        fi
+
         RUNNER_EXIT_CODE=0
         EVALUATOR_EXIT_CODE=1
-        for ATTEMPT in $(seq 1 {MAX_REPAIR_ATTEMPTS}); do
+        for ATTEMPT in $(seq 1 "$REPAIR_ATTEMPTS"); do
           if [ "$ATTEMPT" = "1" ]; then
             EXECUTOR_COMMAND={quoted_initial_executor_command}
           else
