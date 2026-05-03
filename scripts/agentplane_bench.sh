@@ -107,7 +107,7 @@ n_flag() {
 }
 
 openai_agent_env_flag() {
-  printf -- "--agent-env OPENAI_API_KEY=%q" "$OPENAI_API_KEY"
+  printf -- "--agent-env %q" 'OPENAI_API_KEY=${OPENAI_API_KEY}'
 }
 
 repair_attempts_agent_env_flag() {

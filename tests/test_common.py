@@ -125,6 +125,10 @@ def test_embedded_evaluator_has_structured_task_specific_checks() -> None:
     assert "circuit-fibsqrt" in EVALUATOR_SCRIPT
     assert "make-mips-interpreter" in EVALUATOR_SCRIPT
     assert "deterministic fibsqrt public oracle cases" in EVALUATOR_SCRIPT
+    assert "circuit_cases" in EVALUATOR_SCRIPT
+    assert "validate_bmp" in EVALUATOR_SCRIPT
+    assert "complete_missing_interpreter_subsystems" in EVALUATOR_SCRIPT
+    assert "modify_benchmark_timeout" in EVALUATOR_SCRIPT
     assert "Do not read or run hidden graders in /tests" in EVALUATOR_SCRIPT
 
 

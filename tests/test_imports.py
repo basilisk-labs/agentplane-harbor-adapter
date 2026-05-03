@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def test_adapters_import_without_harbor_runtime() -> None:
     from agentplane_harbor_adapter import AgentPlaneClaudeCodeAgent, AgentPlaneCodexAgent
@@ -42,3 +44,10 @@ def test_codex_adapter_repairs_missing_linux_optional_dependency() -> None:
     assert "--include=optional" in command
     assert "@openai/codex-linux-x64" in command
     assert agent.codex_optional_dependency == "@openai/codex-linux-x64"
+
+
+def test_benchmark_script_does_not_put_openai_key_value_in_argv() -> None:
+    script = Path("scripts/agentplane_bench.sh").read_text()
+
+    assert 'OPENAI_API_KEY=${OPENAI_API_KEY}' in script
+    assert "--agent-env OPENAI_API_KEY=%q" not in script

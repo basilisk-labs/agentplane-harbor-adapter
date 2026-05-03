@@ -24,6 +24,16 @@ SOURCE_WHITELIST = {
     "gates.txt",
 }
 
+ROLE_ALIASES = {
+    "CODER",
+    "EVALUATOR",
+    "IMPLEMENTER",
+    "MAINTAINER",
+    "PLANNER",
+    "REVIEWER",
+    "VERIFIER",
+}
+
 
 def run(
     args: list[str],
@@ -182,12 +192,22 @@ def evaluate_plan(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -
             "task-graph.json has invalid leaves at indexes: "
             + ", ".join(str(index) for index in sorted(set(invalid_leaf_indexes)))
         )
-    if not any(owner.upper() in {"CODER", "EVALUATOR", "PLANNER"} for owner in owners):
+    normalized_owners = {owner.upper().removeprefix("AGENT.") for owner in owners}
+    if not any(owner in ROLE_ALIASES for owner in normalized_owners):
         report["warnings"].append("task graph does not use AgentPlane role-like owners")
 
     serialized = json.dumps({"plan": plan, "graph": graph}, sort_keys=True).lower()
-    forbidden_terms = ["hidden test", "/tests", "oracle solution", "reward file", "benchmark timeout"]
-    matched_forbidden = [term for term in forbidden_terms if term in serialized]
+    hard_forbidden_patterns = {
+        "run_or_read_tests_dir": r"(run|read|inspect|open|cat|pytest|execute|use)[^.\n]{0,80}/tests",
+        "oracle_solution": r"oracle solution|solution file|/solution|/oracle",
+        "reward_file": r"reward file|reward\.txt",
+        "modify_benchmark_timeout": r"(modify|change|increase|patch|edit)[^.\n]{0,80}benchmark timeout",
+    }
+    matched_forbidden = [
+        name
+        for name, pattern in hard_forbidden_patterns.items()
+        if re.search(pattern, serialized)
+    ]
     if matched_forbidden:
         report["failures"].append(
             "planning artifacts mention forbidden benchmark surfaces: "
@@ -414,6 +434,74 @@ def fibsqrt_oracle(value: int) -> int:
     return fib_mod(math.isqrt(value))
 
 
+def circuit_cases() -> list[int]:
+    cases = {
+        0,
+        1,
+        2,
+        3,
+        4,
+        8,
+        9,
+        15,
+        16,
+        24,
+        25,
+        35,
+        36,
+        48,
+        49,
+        63,
+        64,
+        80,
+        81,
+        99,
+        100,
+        120,
+        121,
+        143,
+        144,
+        168,
+        169,
+        195,
+        196,
+        207,
+        208,
+        224,
+        225,
+        255,
+        256,
+        1023,
+        1024,
+        4095,
+        4096,
+        9999,
+        10000,
+        19999,
+        20000,
+        65535,
+        65536,
+        999999,
+        1000000,
+        16777215,
+        16777216,
+        2147395600,
+        2147483647,
+        4294836225,
+        4294967295,
+    }
+    seed = 0xC0FFEE
+    for _ in range(64):
+        seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+        root = seed & 0xFFFF
+        delta = ((seed >> 16) % 5) - 2
+        candidate = root * root + delta
+        if 0 <= candidate <= 0xFFFFFFFF:
+            cases.add(candidate)
+        cases.add(seed)
+    return sorted(cases)
+
+
 def evaluate_circuit(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -> dict[str, object]:
     report = base_report(attempt, "circuit-fibsqrt")
     if not executor_gate(report, artifact_dir):
@@ -429,7 +517,35 @@ def evaluate_circuit(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path
             report["repair_hints"].append("repair gates.txt syntax so the public simulator can compile/run")
             return report
 
-    cases = [0, 1, 2, 3, 4, 15, 16, 24, 25, 63, 64, 99, 100, 207, 208, 1024, 4096, 9999, 20000, 65535]
+    gates = read_text(Path("/app/gates.txt"), limit=3_000_000)
+    gate_lines = [line for line in gates.splitlines() if line.strip()]
+    report["checks"]["gate_line_count"] = len(gate_lines)
+    if len(gate_lines) >= 32000:
+        report["failures"].append("gates.txt has 32,000 or more non-empty lines")
+        report["failure_class"] = "invalid_output_shape"
+        report["required_next_action"] = "reduce_gate_count_below_32000"
+        return report
+    if len(gate_lines) < 100:
+        report["failures"].append("gates.txt is too short to plausibly implement fib(isqrt(N))")
+        report["failure_class"] = "fake_or_incomplete_solution"
+        report["required_next_action"] = "implement_nontrivial_circuit"
+        return report
+    invalid_syntax = [
+        line
+        for line in gate_lines[:500]
+        if not re.match(
+            r"^out[A-Za-z0-9_]+\s*=\s*(?:out[A-Za-z0-9_]+|[01]|~out[A-Za-z0-9_]+|out[A-Za-z0-9_]+\s*[&|^]\s*out[A-Za-z0-9_]+)\s*$",
+            line,
+        )
+    ]
+    if invalid_syntax:
+        report["failures"].append("gates.txt contains invalid gate syntax in the first 500 lines")
+        report["artifacts"]["invalid_gate_examples"] = invalid_syntax[:10]
+        report["failure_class"] = "invalid_output_shape"
+        report["required_next_action"] = "repair_gate_syntax"
+        return report
+
+    cases = circuit_cases()
     failures: list[dict[str, object]] = []
     for value in cases:
         expected = str(fibsqrt_oracle(value))
@@ -449,16 +565,59 @@ def evaluate_circuit(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path
         )
         return report
 
-    gates = read_text(Path("/app/gates.txt"))
-    if len(gates.strip().splitlines()) < 3:
-        report["warnings"].append("gates.txt is very short; hidden tests may reject an overfit circuit")
-
     report["verdict"] = "pass"
     report["confidence"] = "medium"
     report["progress_score"] = 1.0
     report["required_next_action"] = "finalize_for_official_verifier"
     report["passes"].append("gates.txt passed deterministic fibsqrt public oracle cases")
     return report
+
+
+def validate_bmp(path: Path) -> dict[str, object]:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return {"valid": False, "reason": str(exc)}
+    if len(data) < 54:
+        return {"valid": False, "reason": "file is too small for BMP header", "size": len(data)}
+    if data[:2] != b"BM":
+        return {"valid": False, "reason": "missing BM signature", "size": len(data)}
+    file_size = int.from_bytes(data[2:6], "little")
+    pixel_offset = int.from_bytes(data[10:14], "little")
+    dib_size = int.from_bytes(data[14:18], "little")
+    width = int.from_bytes(data[18:22], "little", signed=True)
+    height = int.from_bytes(data[22:26], "little", signed=True)
+    planes = int.from_bytes(data[26:28], "little")
+    bpp = int.from_bytes(data[28:30], "little")
+    pixel_data = data[pixel_offset:] if 0 < pixel_offset < len(data) else b""
+    unique_sample = len(set(pixel_data[:8192])) if pixel_data else 0
+    result = {
+        "valid": True,
+        "size": len(data),
+        "header_size": file_size,
+        "pixel_offset": pixel_offset,
+        "dib_size": dib_size,
+        "width": width,
+        "height": height,
+        "planes": planes,
+        "bits_per_pixel": bpp,
+        "unique_pixel_sample_bytes": unique_sample,
+    }
+    if file_size not in {0, len(data)}:
+        result.update({"valid": False, "reason": "BMP file size header does not match"})
+    elif dib_size < 40:
+        result.update({"valid": False, "reason": "unsupported DIB header"})
+    elif width == 0 or height == 0 or abs(width) > 10000 or abs(height) > 10000:
+        result.update({"valid": False, "reason": "invalid BMP dimensions"})
+    elif planes != 1:
+        result.update({"valid": False, "reason": "invalid BMP plane count"})
+    elif bpp not in {8, 16, 24, 32}:
+        result.update({"valid": False, "reason": "unexpected BMP bit depth"})
+    elif not pixel_data:
+        result.update({"valid": False, "reason": "missing BMP pixel data"})
+    elif unique_sample < 4:
+        result.update({"valid": False, "reason": "pixel sample is too uniform"})
+    return result
 
 
 def evaluate_mips(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -> dict[str, object]:
@@ -496,6 +655,35 @@ def evaluate_mips(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -
             "implement ELF loading, CPU registers, instruction decode/execute, memory, syscalls, and BMP output"
         )
         return report
+    required_static_groups = {
+        "elf_loader": [r"e_ident", r"program header", r"p_offset", r"p_vaddr", r"entry"],
+        "instruction_decode": [r"opcode", r"funct", r"rs", r"rt", r"rd", r"shamt"],
+        "memory_access": [
+            r"readUInt(8|16|32)",
+            r"writeUInt(8|16|32)",
+            r"getUint(8|16|32)",
+            r"setUint(8|16|32)",
+            r"load(8|16|32)",
+            r"store(8|16|32)",
+        ],
+        "syscalls": [r"syscall", r"open", r"read", r"write", r"close"],
+    }
+    missing_groups = [
+        group
+        for group, patterns in required_static_groups.items()
+        if sum(1 for pattern in patterns if re.search(pattern, text, flags=re.I)) < 2
+    ]
+    if missing_groups:
+        report["failures"].append(
+            "vm.js is missing required interpreter implementation groups: "
+            + ", ".join(missing_groups)
+        )
+        report["failure_class"] = "fake_or_incomplete_solution"
+        report["required_next_action"] = "complete_missing_interpreter_subsystems"
+        report["repair_hints"].append(
+            "add concrete ELF loading, instruction decoding, memory access, and syscall implementations"
+        )
+        return report
     if re.search(r"scaffold|stand[- ]?in|fake|placeholder|deterministic.*frame|gradient", text, flags=re.I):
         report["failures"].append("vm.js appears to be a scaffold or fake frame generator")
         report["failure_class"] = "fake_or_incomplete_solution"
@@ -515,10 +703,18 @@ def evaluate_mips(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -
         report["required_next_action"] = "execute_interpreter_until_framebuffer_output"
         report["repair_hints"].append("run enough emulated execution to produce a real framebuffer BMP")
         return report
+    frame_report = validate_bmp(frames[0])
+    report["checks"]["bmp_validation"] = frame_report
+    if not frame_report["valid"]:
+        report["failures"].append("frame candidate is not a valid non-empty BMP framebuffer")
+        report["failure_class"] = "fake_or_incomplete_solution"
+        report["required_next_action"] = "write_real_bmp_framebuffer"
+        report["repair_hints"].append("write a real BMP with valid header, dimensions, and non-uniform pixels")
+        return report
 
     report["verdict"] = "pass"
-    report["confidence"] = "low"
-    report["progress_score"] = 0.8
+    report["confidence"] = "low" if code == 124 else "medium"
+    report["progress_score"] = 0.75 if code == 124 else 0.9
     report["required_next_action"] = "finalize_for_official_verifier"
     report["passes"].append("vm.js has interpreter signals and produced a BMP candidate")
     report["warnings"].append("MIPS local check is still weaker than the hidden verifier")

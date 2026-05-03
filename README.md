@@ -27,8 +27,9 @@ reviewed for Terminal-Bench integrity compliance.
 - No benchmark-specific hints, oracle files, test folders, or modified timeouts
 
 Codex CLI is authenticated inside the benchmark container with
-`codex login --with-api-key`; the key is passed through Harbor agent env and is
-not printed by the run wrapper.
+`codex login --with-api-key`; the local run wrapper passes a Harbor env
+template (`OPENAI_API_KEY=${OPENAI_API_KEY}`) instead of putting the key value
+in the process argv.
 
 If Homebrew's Harbor registry CLI is also installed, set this in `.env.local`:
 
@@ -208,6 +209,12 @@ inspect the workspace and write valid planning artifacts with a compact atomic
 task graph. The evaluator checks those artifacts before the implementation loop
 starts, so the Harbor profile better matches normal AgentPlane usage:
 plan, approve, execute scoped leaves, evaluate, repair, and finalize.
+
+The local evaluator is intentionally stricter than a smoke check for the task
+families currently covered: planner artifacts are schema-checked without
+penalizing safety disclaimers, `circuit-fibsqrt` is tested against deterministic
+square-boundary and pseudo-random oracle cases, and `make-mips-interpreter`
+requires concrete interpreter subsystems plus a valid non-uniform BMP frame.
 
 The minimum useful claim is not "AgentPlane always scores higher". It is:
 
