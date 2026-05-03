@@ -93,9 +93,14 @@ def write_outputs(report: dict[str, object], artifact_dir: Path) -> int:
 def base_report(attempt: str, task_type: str) -> dict[str, object]:
     return {
         "attempt": attempt,
+        "phase": "final",
         "task_type": task_type,
         "verdict": "fail",
         "confidence": "low",
+        "failure_class": None,
+        "progress_score": 0.0,
+        "required_next_action": None,
+        "forbidden_actions": [],
         "passes": [],
         "failures": [],
         "warnings": [],
@@ -103,6 +108,114 @@ def base_report(attempt: str, task_type: str) -> dict[str, object]:
         "checks": {},
         "artifacts": {},
     }
+
+
+def load_json_file(path: Path) -> tuple[object | None, str | None]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except OSError as exc:
+        return None, str(exc)
+    except json.JSONDecodeError as exc:
+        return None, f"{exc.msg} at line {exc.lineno} column {exc.colno}"
+
+
+def evaluate_plan(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -> dict[str, object]:
+    report = base_report(attempt, "planning")
+    report["phase"] = "plan"
+    if not executor_gate(report, artifact_dir):
+        report["failure_class"] = "planner_execution_failed"
+        report["required_next_action"] = "repair_planner_execution"
+        return report
+
+    plan_path = artifact_dir / "plan.json"
+    graph_path = artifact_dir / "task-graph.json"
+    plan, plan_error = load_json_file(plan_path)
+    graph, graph_error = load_json_file(graph_path)
+    if plan_error:
+        report["failures"].append(f"plan.json is missing or invalid JSON: {plan_error}")
+    if graph_error:
+        report["failures"].append(f"task-graph.json is missing or invalid JSON: {graph_error}")
+    if plan_error or graph_error:
+        report["failure_class"] = "missing_or_invalid_plan_artifacts"
+        report["required_next_action"] = "write_valid_plan_and_task_graph_json"
+        report["repair_hints"].append(
+            "write valid JSON planning artifacts before implementation starts"
+        )
+        return report
+
+    if not isinstance(plan, dict):
+        report["failures"].append("plan.json must be a JSON object")
+    if not isinstance(graph, dict):
+        report["failures"].append("task-graph.json must be a JSON object")
+    if report["failures"]:
+        report["failure_class"] = "invalid_plan_schema"
+        report["required_next_action"] = "rewrite_planning_artifacts_as_objects"
+        return report
+
+    required_plan_fields = ["goal", "assumptions", "phases", "risks", "verification", "stop_rules"]
+    missing_plan_fields = [field for field in required_plan_fields if not plan.get(field)]
+    if missing_plan_fields:
+        report["failures"].append("plan.json missing required fields: " + ", ".join(missing_plan_fields))
+
+    leaves = graph.get("leaves")
+    if not isinstance(leaves, list) or len(leaves) == 0:
+        report["failures"].append("task-graph.json must include a non-empty leaves array")
+        leaves = []
+    if len(leaves) > 8:
+        report["warnings"].append("task graph has more than 8 leaves; benchmark graph should stay compact")
+
+    required_leaf_fields = ["id", "title", "owner", "depends_on", "success_criteria", "verification"]
+    invalid_leaf_indexes: list[int] = []
+    owners: set[str] = set()
+    for index, leaf in enumerate(leaves):
+        if not isinstance(leaf, dict):
+            invalid_leaf_indexes.append(index)
+            continue
+        owners.add(str(leaf.get("owner", "")))
+        missing = [field for field in required_leaf_fields if field not in leaf]
+        if missing:
+            invalid_leaf_indexes.append(index)
+        if isinstance(leaf.get("verification"), str) and not leaf["verification"].strip():
+            invalid_leaf_indexes.append(index)
+    if invalid_leaf_indexes:
+        report["failures"].append(
+            "task-graph.json has invalid leaves at indexes: "
+            + ", ".join(str(index) for index in sorted(set(invalid_leaf_indexes)))
+        )
+    if not any(owner.upper() in {"CODER", "EVALUATOR", "PLANNER"} for owner in owners):
+        report["warnings"].append("task graph does not use AgentPlane role-like owners")
+
+    serialized = json.dumps({"plan": plan, "graph": graph}, sort_keys=True).lower()
+    forbidden_terms = ["hidden test", "/tests", "oracle solution", "reward file", "benchmark timeout"]
+    matched_forbidden = [term for term in forbidden_terms if term in serialized]
+    if matched_forbidden:
+        report["failures"].append(
+            "planning artifacts mention forbidden benchmark surfaces: "
+            + ", ".join(matched_forbidden)
+        )
+        report["forbidden_actions"] = matched_forbidden
+
+    if report["failures"]:
+        report["failure_class"] = "weak_task_decomposition"
+        report["required_next_action"] = "repair_plan_before_implementation"
+        report["repair_hints"].append(
+            "create a compact atomic graph: inspect -> implement -> verify -> repair/finalize"
+        )
+        report["checks"]["plan_required_fields_present"] = False
+        report["checks"]["leaf_count"] = len(leaves)
+        return report
+
+    report["verdict"] = "pass"
+    report["confidence"] = "medium"
+    report["progress_score"] = 0.2
+    report["required_next_action"] = "execute_task_graph_leaves_in_order"
+    report["passes"].append("planning artifacts define a compact executable task graph")
+    report["checks"]["plan_required_fields_present"] = True
+    report["checks"]["leaf_count"] = len(leaves)
+    report["artifacts"]["plan_path"] = str(plan_path)
+    report["artifacts"]["task_graph_path"] = str(graph_path)
+    append_log(log_path, "Planner artifacts accepted\n")
+    return report
 
 
 def executor_gate(report: dict[str, object], artifact_dir: Path) -> bool:
@@ -197,6 +310,8 @@ def evaluate_overfull(cwd: Path, artifact_dir: Path, attempt: str, log_path: Pat
     report["checks"]["underfull_hbox_count"] = len(underfull)
     if overfull:
         report["failures"].append(f"main.log still contains {len(overfull)} Overfull hbox warning(s)")
+        report["failure_class"] = "local_verification_failed"
+        report["required_next_action"] = "repair_overfull_hbox"
         report["artifacts"]["overfull_lines"] = overfull[:20]
         report["repair_hints"].append(
             "replace long words or phrases in input.tex with allowed synonyms until Overfull hbox count is zero"
@@ -209,6 +324,8 @@ def evaluate_overfull(cwd: Path, artifact_dir: Path, attempt: str, log_path: Pat
 
     report["verdict"] = "pass"
     report["confidence"] = "medium"
+    report["progress_score"] = 1.0
+    report["required_next_action"] = "finalize_for_official_verifier"
     report["passes"].append("pdflatex completed without Overfull hbox warnings")
     return report
 
@@ -272,11 +389,15 @@ def evaluate_povray(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path)
     report["artifacts"]["povray_render_tail"] = render_log[-3000:]
     if code != 0 or not output.exists() or output.stat().st_size < 100:
         report["failures"].append("POV-Ray sanity render did not produce a non-empty PNG")
+        report["failure_class"] = "local_verification_failed"
+        report["required_next_action"] = "repair_povray_build_or_render_path"
         report["repair_hints"].append("verify include paths, dependencies, and output format with illum1.pov")
         return report
 
     report["verdict"] = "pass"
     report["confidence"] = "medium"
+    report["progress_score"] = 1.0
+    report["required_next_action"] = "finalize_for_official_verifier"
     report["passes"].append("POV-Ray version and sanity render checks passed")
     report["artifacts"]["render_output"] = str(output)
     return report
@@ -320,6 +441,8 @@ def evaluate_circuit(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path
     report["checks"]["failed_case_count"] = len(failures)
     if failures:
         report["failures"].append(f"gates.txt failed {len(failures)} deterministic fibsqrt case(s)")
+        report["failure_class"] = "local_verification_failed"
+        report["required_next_action"] = "repair_circuit_against_expanded_oracle_cases"
         report["artifacts"]["failed_cases"] = failures[:20]
         report["repair_hints"].append(
             "derive gates from floor(sqrt(input)) followed by Fibonacci modulo 2^32; do not tune only two examples"
@@ -332,6 +455,8 @@ def evaluate_circuit(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path
 
     report["verdict"] = "pass"
     report["confidence"] = "medium"
+    report["progress_score"] = 1.0
+    report["required_next_action"] = "finalize_for_official_verifier"
     report["passes"].append("gates.txt passed deterministic fibsqrt public oracle cases")
     return report
 
@@ -365,12 +490,16 @@ def evaluate_mips(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -
     report["checks"]["static_interpreter_signal_count"] = signal_count
     if signal_count < 8:
         report["failures"].append("vm.js does not look like a real MIPS/ELF interpreter")
+        report["failure_class"] = "fake_or_incomplete_solution"
+        report["required_next_action"] = "implement_real_mips_interpreter_path"
         report["repair_hints"].append(
             "implement ELF loading, CPU registers, instruction decode/execute, memory, syscalls, and BMP output"
         )
         return report
     if re.search(r"scaffold|stand[- ]?in|fake|placeholder|deterministic.*frame|gradient", text, flags=re.I):
         report["failures"].append("vm.js appears to be a scaffold or fake frame generator")
+        report["failure_class"] = "fake_or_incomplete_solution"
+        report["required_next_action"] = "remove_fake_frame_generator"
         report["repair_hints"].append("remove fabricated frame generation and execute doomgeneric_mips for real")
         return report
 
@@ -382,11 +511,15 @@ def evaluate_mips(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path) -
     report["artifacts"]["node_vm_tail"] = output[-3000:]
     if not frames:
         report["failures"].append("node vm.js did not produce a plausible BMP frame")
+        report["failure_class"] = "local_verification_failed"
+        report["required_next_action"] = "execute_interpreter_until_framebuffer_output"
         report["repair_hints"].append("run enough emulated execution to produce a real framebuffer BMP")
         return report
 
     report["verdict"] = "pass"
     report["confidence"] = "low"
+    report["progress_score"] = 0.8
+    report["required_next_action"] = "finalize_for_official_verifier"
     report["passes"].append("vm.js has interpreter signals and produced a BMP candidate")
     report["warnings"].append("MIPS local check is still weaker than the hidden verifier")
     report["artifacts"]["frame_candidates"] = [str(path) for path in frames[:10]]
@@ -399,6 +532,8 @@ def evaluate_generic(cwd: Path, artifact_dir: Path, attempt: str, log_path: Path
         return report
     report["verdict"] = "inconclusive"
     report["confidence"] = "low"
+    report["progress_score"] = 0.4
+    report["required_next_action"] = "run_task_local_smoke_check"
     report["passes"].append("executor exited successfully")
     report["warnings"].append("no task-specific public evaluator matched")
     report["repair_hints"].append("run the most relevant public task-local smoke check before final grading")
@@ -409,6 +544,7 @@ def main() -> int:
     # Public, task-local checks only. Do not read or run hidden graders in /tests.
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", required=True)
+    parser.add_argument("--phase", choices=["plan", "final"], default="final")
     parser.add_argument("--artifact-dir", required=True)
     args = parser.parse_args()
 
@@ -421,17 +557,20 @@ def main() -> int:
     if shutil.which("timeout") is None:
         append_log(log_path, "WARN: timeout command is unavailable; Python subprocess timeouts remain active\n")
 
-    task_type = detect_task_type(cwd)
-    if task_type == "overfull-hbox":
-        report = evaluate_overfull(cwd, artifact_dir, args.attempt, log_path)
-    elif task_type == "build-pov-ray":
-        report = evaluate_povray(cwd, artifact_dir, args.attempt, log_path)
-    elif task_type == "circuit-fibsqrt":
-        report = evaluate_circuit(cwd, artifact_dir, args.attempt, log_path)
-    elif task_type == "make-mips-interpreter":
-        report = evaluate_mips(cwd, artifact_dir, args.attempt, log_path)
+    if args.phase == "plan":
+        report = evaluate_plan(cwd, artifact_dir, args.attempt, log_path)
     else:
-        report = evaluate_generic(cwd, artifact_dir, args.attempt, log_path)
+        task_type = detect_task_type(cwd)
+        if task_type == "overfull-hbox":
+            report = evaluate_overfull(cwd, artifact_dir, args.attempt, log_path)
+        elif task_type == "build-pov-ray":
+            report = evaluate_povray(cwd, artifact_dir, args.attempt, log_path)
+        elif task_type == "circuit-fibsqrt":
+            report = evaluate_circuit(cwd, artifact_dir, args.attempt, log_path)
+        elif task_type == "make-mips-interpreter":
+            report = evaluate_mips(cwd, artifact_dir, args.attempt, log_path)
+        else:
+            report = evaluate_generic(cwd, artifact_dir, args.attempt, log_path)
 
     report["checks"]["cwd"] = str(cwd)
     return write_outputs(report, artifact_dir)

@@ -190,8 +190,11 @@ AgentPlane-specific proof:
 
 The adapter also writes local evaluator artifacts for each AgentPlane attempt:
 
+- `.agentplane-harbor/agentplane/plan.json`
+- `.agentplane-harbor/agentplane/task-graph.json`
 - `.agentplane-harbor/agentplane/evaluator-report.json`
 - `.agentplane-harbor/agentplane/evaluator-feedback.txt`
+- `.agentplane-harbor/agentplane/planner-attempt-<n>.log`
 - `.agentplane-harbor/agentplane/evaluator-attempt-<n>.log`
 - `.agentplane-harbor/agentplane/executor-attempt-<n>.log`
 
@@ -199,6 +202,12 @@ The evaluator uses only public task-local signals and treats the official
 Harbor verifier as the scoring truth. A failed local evaluator triggers
 AgentPlane rework, but the agent command exits successfully so Harbor can
 record a normal trial and let the official verifier assign reward.
+
+Before implementation, the adapter now runs a planning gate. The executor must
+inspect the workspace and write valid planning artifacts with a compact atomic
+task graph. The evaluator checks those artifacts before the implementation loop
+starts, so the Harbor profile better matches normal AgentPlane usage:
+plan, approve, execute scoped leaves, evaluate, repair, and finalize.
 
 The minimum useful claim is not "AgentPlane always scores higher". It is:
 

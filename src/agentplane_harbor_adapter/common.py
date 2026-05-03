@@ -11,6 +11,7 @@ from typing import Any
 from .evaluator import EVALUATOR_SCRIPT
 
 DEFAULT_REPAIR_ATTEMPTS = 3
+DEFAULT_PLAN_ATTEMPTS = 2
 
 GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
     """
@@ -58,6 +59,28 @@ BENCHMARK_EXECUTION_CONTRACT = textwrap.dedent(
 ).strip()
 
 
+PLANNING_EXECUTION_CONTRACT = textwrap.dedent(
+    """
+    You are in the planning phase of a non-interactive benchmark run.
+
+    Planning contract:
+    - Inspect the workspace enough to understand the task shape.
+    - Do not implement the solution in this phase.
+    - Do not modify benchmark timeouts, grader scripts, reward files, hidden tests, or oracle files.
+    - Create `.agentplane-harbor/agentplane/plan.json`.
+    - Create `.agentplane-harbor/agentplane/task-graph.json`.
+    - Both files must be valid JSON.
+    - The plan must include: goal, assumptions, phases, risks, verification, stop_rules.
+    - The task graph must include atomic executable leaves with ids, title, owner, depends_on,
+      success_criteria, and verification.
+    - Keep the graph small. Prefer 3-6 ordered leaves.
+    - Finish after writing the planning artifacts.
+
+    User benchmark instruction:
+    """
+).strip()
+
+
 @dataclass(frozen=True)
 class ExecutorSpec:
     agent_name: str
@@ -90,7 +113,15 @@ def render_agentplane_command(
     model: str | None = None,
 ) -> str:
     benchmark_instruction = f"{BENCHMARK_EXECUTION_CONTRACT}\n\n{instruction}"
-    quoted_instruction = shell_quote(benchmark_instruction)
+    planning_instruction = f"{PLANNING_EXECUTION_CONTRACT}\n\n{instruction}"
+    execution_instruction = (
+        f"{benchmark_instruction}\n\n"
+        "AgentPlane planning artifacts are expected at:\n"
+        "- .agentplane-harbor/agentplane/plan.json\n"
+        "- .agentplane-harbor/agentplane/task-graph.json\n\n"
+        "Before implementing, read those artifacts and execute the atomic leaves in order. "
+        "If they are missing or weak, create or repair them first, then continue."
+    )
     quoted_policy = shell_quote(GENERIC_AGENTPLANE_POLICY)
     model_flag = f"{executor.model_flag} {shell_quote(model)}" if model else ""
     repair_instruction = shell_quote(
@@ -102,8 +133,28 @@ def render_agentplane_command(
         "of making a narrow cosmetic edit.\n\nOriginal benchmark instruction:\n"
         f"{benchmark_instruction}"
     )
+    quoted_execution_instruction = shell_quote(execution_instruction)
+    quoted_planning_instruction = shell_quote(planning_instruction)
+    planning_repair_instruction = shell_quote(
+        "Previous planning attempt failed the AgentPlane planner gate. "
+        "Read .agentplane-harbor/agentplane/evaluator-report.json and "
+        ".agentplane-harbor/agentplane/evaluator-feedback.txt, then repair only "
+        "the planning artifacts. Write valid JSON to "
+        ".agentplane-harbor/agentplane/plan.json and "
+        ".agentplane-harbor/agentplane/task-graph.json. Do not implement the "
+        "task solution in this phase.\n\nOriginal benchmark instruction:\n"
+        f"{planning_instruction}"
+    )
+    planner_command = executor.run_command_template.format(
+        instruction=quoted_planning_instruction,
+        model_flag=model_flag,
+    )
+    planner_repair_command = executor.run_command_template.format(
+        instruction=planning_repair_instruction,
+        model_flag=model_flag,
+    )
     initial_executor_command = executor.run_command_template.format(
-        instruction=quoted_instruction,
+        instruction=quoted_execution_instruction,
         model_flag=model_flag,
     )
     repair_executor_command = executor.run_command_template.format(
@@ -112,6 +163,8 @@ def render_agentplane_command(
     )
     quoted_initial_executor_command = shell_quote(initial_executor_command)
     quoted_repair_executor_command = shell_quote(repair_executor_command)
+    quoted_planner_command = shell_quote(planner_command)
+    quoted_planner_repair_command = shell_quote(planner_repair_command)
     quoted_evaluator_script = shell_quote(EVALUATOR_SCRIPT)
 
     return textwrap.dedent(
@@ -135,16 +188,17 @@ def render_agentplane_command(
         fi
 
         agentplane task plan set "$TASK_ID" \
-          --text "Plan: inspect, make scoped changes, run checks, and leave grader-ready state." \
+          --text "Plan: create task graph, execute leaves, verify, repair, and finalize." \
           --updated-by CODER || true
         agentplane task plan approve "$TASK_ID" --by ORCHESTRATOR || true
         agentplane task start-ready "$TASK_ID" \
-          --author CODER \
-          --body "Start: Terminal-Bench run with generic AgentPlane policy." || true
+          --author PLANNER \
+          --body "Start: planning Terminal-Bench run with AgentPlane phase gate." || true
 
         run_evaluator() {{
           set +e
           local attempt="$1"
+          local phase="${{2:-final}}"
           local python_bin
           python_bin="$(command -v python3 || command -v python || true)"
           if [ -z "$python_bin" ]; then
@@ -154,6 +208,7 @@ def render_agentplane_command(
           fi
           "$python_bin" .agentplane-harbor/agentplane/evaluator.py \
             --attempt "$attempt" \
+            --phase "$phase" \
             --artifact-dir .agentplane-harbor/agentplane
           return "$?"
         }}
@@ -180,6 +235,59 @@ def render_agentplane_command(
           set -e
           return 0
         }}
+
+        PLAN_ATTEMPTS="${{AGENTPLANE_PLAN_ATTEMPTS:-{DEFAULT_PLAN_ATTEMPTS}}}"
+        if ! printf '%s' "$PLAN_ATTEMPTS" | grep -Eq '^[1-9][0-9]*$'; then
+          PLAN_ATTEMPTS="{DEFAULT_PLAN_ATTEMPTS}"
+        fi
+
+        PLANNER_EXIT_CODE=0
+        PLAN_EVALUATOR_EXIT_CODE=1
+        for PLAN_ATTEMPT in $(seq 1 "$PLAN_ATTEMPTS"); do
+          if [ "$PLAN_ATTEMPT" = "1" ]; then
+            PLANNER_COMMAND={quoted_planner_command}
+          else
+            PLANNER_COMMAND={quoted_planner_repair_command}
+          fi
+
+          set +e
+          {{
+            echo "=== AgentPlane planner attempt $PLAN_ATTEMPT ==="
+            date -u
+            eval "$PLANNER_COMMAND"
+          }} > ".agentplane-harbor/agentplane/planner-attempt-${{PLAN_ATTEMPT}}.log" 2>&1
+          PLANNER_EXIT_CODE="$?"
+          set -e
+          cp ".agentplane-harbor/agentplane/planner-attempt-${{PLAN_ATTEMPT}}.log" \
+            .agentplane-harbor/agentplane/planner.log
+          printf '%s\\n' "$PLANNER_EXIT_CODE" \
+            > .agentplane-harbor/agentplane/executor-exit-code.txt
+
+          set +e
+          run_evaluator "$PLAN_ATTEMPT" "plan"
+          PLAN_EVALUATOR_EXIT_CODE="$?"
+          set -e
+          printf '%s\\n' "$PLAN_EVALUATOR_EXIT_CODE" \
+            > .agentplane-harbor/agentplane/plan-evaluator-exit-code.txt
+
+          if [ "$PLAN_EVALUATOR_EXIT_CODE" = "0" ]; then
+            agentplane verify "$TASK_ID" \
+              --ok \
+              --by PLANNER \
+              --note "Planner gate accepted attempt $PLAN_ATTEMPT." \
+              --local-only || true
+            break
+          fi
+
+          record_rework \
+            "Planner gate rejected attempt $PLAN_ATTEMPT." \
+            "Runner should repair task decomposition before implementation." \
+            "Retrying planning with evaluator feedback."
+        done
+
+        agentplane task start-ready "$TASK_ID" \
+          --author CODER \
+          --body "Start: executing approved or best-available Terminal-Bench task graph." || true
 
         REPAIR_ATTEMPTS="${{AGENTPLANE_REPAIR_ATTEMPTS:-{DEFAULT_REPAIR_ATTEMPTS}}}"
         if ! printf '%s' "$REPAIR_ATTEMPTS" | grep -Eq '^[1-9][0-9]*$'; then
