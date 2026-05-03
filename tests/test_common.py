@@ -31,8 +31,11 @@ def test_render_agentplane_command_uses_generic_policy_and_executor() -> None:
 
     assert "agentplane init --yes" in command
     assert "agentplane task new" in command
+    assert "agentplane task plan approve" in command
     assert "agentplane verify" in command
     assert "example run --model provider/model 'fix the task'" in command
+    assert "executor-exit-code.txt" in command
+    assert "executor.log" in command
     assert "Do not inspect oracle solutions" in command
 
 

@@ -60,10 +60,19 @@ def render_agentplane_command(
     quoted_instruction = shell_quote(instruction)
     quoted_policy = shell_quote(GENERIC_AGENTPLANE_POLICY)
     model_flag = f"{executor.model_flag} {shell_quote(model)}" if model else ""
-    executor_command = executor.run_command_template.format(
+    raw_executor_command = executor.run_command_template.format(
         instruction=quoted_instruction,
         model_flag=model_flag,
     )
+    executor_command = textwrap.dedent(
+        f"""
+        set +e
+        {raw_executor_command} > .agentplane-harbor/agentplane/executor.log 2>&1
+        EXECUTOR_EXIT_CODE="$?"
+        set -e
+        printf '%s\\n' "$EXECUTOR_EXIT_CODE" > .agentplane-harbor/agentplane/executor-exit-code.txt
+        """
+    ).strip()
 
     return textwrap.dedent(
         f"""
@@ -86,6 +95,7 @@ def render_agentplane_command(
         agentplane task plan set "$TASK_ID" \
           --text "Plan: inspect, make scoped changes, run checks, and leave grader-ready state." \
           --updated-by CODER || true
+        agentplane task plan approve "$TASK_ID" --by ORCHESTRATOR || true
         agentplane task start-ready "$TASK_ID" \
           --author CODER \
           --body "Start: Terminal-Bench run with generic AgentPlane policy." || true

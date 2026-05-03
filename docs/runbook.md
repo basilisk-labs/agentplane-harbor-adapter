@@ -5,7 +5,8 @@
 ```bash
 docker ps
 uv --version
-harbor --help
+uv tool install harbor
+$HOME/.local/bin/harbor --help
 ```
 
 ## 2. Install adapter
@@ -15,10 +16,16 @@ uv venv
 uv pip install -e ".[dev]"
 ```
 
+If another `harbor` binary is first on `PATH`, put this in `.env.local`:
+
+```bash
+HARBOR_BIN=$HOME/.local/bin/harbor
+```
+
 ## 3. Oracle smoke
 
 ```bash
-harbor run -d terminal-bench/terminal-bench-2 -a oracle -n 1
+./scripts/agentplane_bench.sh oracle-smoke
 ```
 
 This proves Harbor and Docker work before testing AgentPlane.
@@ -26,12 +33,7 @@ This proves Harbor and Docker work before testing AgentPlane.
 ## 4. AgentPlane smoke
 
 ```bash
-export OPENAI_API_KEY="..."
-harbor run \
-  -d terminal-bench/terminal-bench-2 \
-  --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
-  -m openai/gpt-5.5 \
-  -n 1
+./scripts/agentplane_bench.sh smoke
 ```
 
 ## 5. Inspect artifacts
@@ -59,4 +61,3 @@ Run the official dataset only after:
 - ATIF exists for passing trials
 - no forbidden artifacts are present
 - current submission route is confirmed
-

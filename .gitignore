@@ -5,7 +5,8 @@ __pycache__/
 .pyright/
 .agentplane-harbor/
 harbor-runs/
+jobs/
+.env.local
 dist/
 build/
 *.egg-info/
-

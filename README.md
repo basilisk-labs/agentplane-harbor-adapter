@@ -22,9 +22,19 @@ reviewed for Terminal-Bench integrity compliance.
 
 - Docker running locally
 - `uv`
-- Harbor installed or runnable through `uvx`
+- Harbor benchmark framework installed with `uv tool install harbor`
 - Provider API key for the selected executor/model
 - No benchmark-specific hints, oracle files, test folders, or modified timeouts
+
+Codex CLI is authenticated inside the benchmark container with
+`codex login --with-api-key`; the key is passed through Harbor agent env and is
+not printed by the run wrapper.
+
+If Homebrew's Harbor registry CLI is also installed, set this in `.env.local`:
+
+```bash
+HARBOR_BIN=$HOME/.local/bin/harbor
+```
 
 ## Install for local development
 
@@ -45,6 +55,7 @@ $EDITOR .env.local
 Then run:
 
 ```bash
+uv tool install harbor
 ./scripts/agentplane_bench.sh setup
 ./scripts/agentplane_bench.sh preflight
 ./scripts/agentplane_bench.sh oracle-smoke
@@ -78,7 +89,7 @@ export OPENAI_API_KEY="..."
 harbor run \
   -d terminal-bench/terminal-bench-2 \
   --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
-  -m openai/gpt-5-nano \
+  -m gpt-5-nano \
   -n 1
 ```
 
@@ -106,7 +117,7 @@ Example Harbor run shape:
 harbor run \
   -d terminal-bench/terminal-bench-2 \
   --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
-  -m openai/gpt-5-nano
+  -m gpt-5-nano
 ```
 
 If the active submission route still requires the legacy Terminal-Bench CLI,

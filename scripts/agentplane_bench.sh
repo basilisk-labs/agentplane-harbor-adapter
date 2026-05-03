@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 
 if [[ -f .env.local ]]; then
   set -a
@@ -11,7 +12,7 @@ if [[ -f .env.local ]]; then
   set +a
 fi
 
-MODEL="${MODEL:-openai/gpt-5-nano}"
+MODEL="${MODEL:-gpt-5-nano}"
 DATASET="${DATASET:-terminal-bench/terminal-bench-2}"
 LEADERBOARD_DATASET="${LEADERBOARD_DATASET:-terminal-bench-core==0.1.1}"
 N="${N:-1}"
@@ -34,7 +35,7 @@ Commands:
 
 Environment:
   OPENAI_API_KEY       Required for agentplane-codex.
-  MODEL                Default: openai/gpt-5-nano
+  MODEL                Default: gpt-5-nano
   DATASET              Default: terminal-bench/terminal-bench-2
   LEADERBOARD_DATASET  Default: terminal-bench-core==0.1.1
   N                    Default: 1. Empty N means no -n flag.
@@ -61,10 +62,21 @@ run_shell() {
   bash -lc "$*"
 }
 
+run_shell_redacted() {
+  local redacted="$1"
+  local command="$2"
+  echo "+ $redacted"
+  bash -lc "$command"
+}
+
 n_flag() {
   if [[ -n "${N:-}" ]]; then
-    printf -- "-n %q" "$N"
+    printf -- "--n-tasks %q" "$N"
   fi
+}
+
+openai_agent_env_flag() {
+  printf -- "--agent-env OPENAI_API_KEY=%q" "$OPENAI_API_KEY"
 }
 
 case "${1:-}" in
@@ -77,24 +89,43 @@ case "${1:-}" in
     run_cmd docker ps >/dev/null
     run_cmd uv --version
     run_shell "$HARBOR_BIN --help >/dev/null"
-    run_shell "$TB_BIN --help >/dev/null"
+    if run_shell "$TB_BIN --help >/dev/null"; then
+      echo "tb=available"
+    else
+      echo "tb=unavailable (only needed for leaderboard-tb)"
+    fi
     require_openai_key
     echo "model=$MODEL"
     echo "dataset=$DATASET"
     echo "leaderboard_dataset=$LEADERBOARD_DATASET"
-    echo "n=${N:-full}"
+    echo "n_tasks=${N:-full}"
+    echo "n_concurrent=$N_CONCURRENT"
     ;;
 
   oracle-smoke)
-    run_shell "$HARBOR_BIN run -d '$DATASET' -a oracle -n 1"
+    run_shell "$HARBOR_BIN run -d '$DATASET' -a oracle --n-tasks 1 --n-concurrent 1 --yes"
     ;;
 
   smoke)
     require_openai_key
-    run_shell "$HARBOR_BIN run \
+    redacted_openai_agent_env="--agent-env OPENAI_API_KEY=***"
+    openai_agent_env="$(openai_agent_env_flag)"
+    run_shell_redacted "$HARBOR_BIN run \
       -d '$DATASET' \
       --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
       -m '$MODEL' \
+      --env-file .env.local \
+      $redacted_openai_agent_env \
+      --artifact /app/.agentplane-harbor \
+      --n-concurrent '$N_CONCURRENT' \
+      $(n_flag)" "$HARBOR_BIN run \
+      -d '$DATASET' \
+      --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
+      -m '$MODEL' \
+      --env-file .env.local \
+      $openai_agent_env \
+      --artifact /app/.agentplane-harbor \
+      --n-concurrent '$N_CONCURRENT' \
       $(n_flag)"
     ;;
 
@@ -104,10 +135,23 @@ case "${1:-}" in
       echo "Refusing full run while N is set to '$N'. Run with N= for all tasks." >&2
       exit 1
     fi
-    run_shell "$HARBOR_BIN run \
+    redacted_openai_agent_env="--agent-env OPENAI_API_KEY=***"
+    openai_agent_env="$(openai_agent_env_flag)"
+    run_shell_redacted "$HARBOR_BIN run \
       -d '$DATASET' \
       --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
-      -m '$MODEL'"
+      -m '$MODEL' \
+      --env-file .env.local \
+      $redacted_openai_agent_env \
+      --artifact /app/.agentplane-harbor \
+      --n-concurrent '$N_CONCURRENT'" "$HARBOR_BIN run \
+      -d '$DATASET' \
+      --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
+      -m '$MODEL' \
+      --env-file .env.local \
+      $openai_agent_env \
+      --artifact /app/.agentplane-harbor \
+      --n-concurrent '$N_CONCURRENT'"
     ;;
 
   leaderboard-tb)

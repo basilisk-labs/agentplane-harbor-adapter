@@ -27,13 +27,21 @@ class AgentPlaneInstalledAgent(BaseInstalledAgent):  # type: ignore[misc,valid-t
         "apt-get install -y nodejs git ca-certificates"
     )
 
+    def __init__(self, *args: Any, model_name: str | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.model_name = model_name
+
     async def install(self, environment: Any) -> None:
         await self.exec_as_root(environment, command=self.node_setup_command)
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
+                "git config --global user.name 'AgentPlane Harbor'; "
+                "git config --global user.email 'agentplane-harbor@example.invalid'; "
                 f"npm install -g agentplane {self.executor.npm_package}; "
+                f"test -n \"${{{self.executor.api_key_env}:-}}\"; "
+                f"printenv {self.executor.api_key_env} | codex login --with-api-key; "
                 "agentplane --version"
             ),
         )
@@ -45,7 +53,7 @@ class AgentPlaneInstalledAgent(BaseInstalledAgent):  # type: ignore[misc,valid-t
         environment: Any,
         context: Any,
     ) -> None:
-        model = getattr(context, "model", None)
+        model = self.model_name or getattr(context, "model", None)
         started_at = None
         if hasattr(context, "metadata") and isinstance(context.metadata, dict):
             context.metadata["agentplane_adapter"] = self.executor.agent_name
