@@ -13,6 +13,7 @@ ENV_LEADERBOARD_DATASET="${LEADERBOARD_DATASET:-}"
 ENV_MODEL="${MODEL:-}"
 ENV_N="${N:-}"
 ENV_N_CONCURRENT="${N_CONCURRENT:-}"
+ENV_AGENT_SETUP_TIMEOUT_MULTIPLIER="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-}"
 ENV_HARBOR_BIN="${HARBOR_BIN:-}"
 ENV_TB_BIN="${TB_BIN:-}"
 
@@ -31,6 +32,7 @@ LEADERBOARD_DATASET="${ENV_LEADERBOARD_DATASET:-${LEADERBOARD_DATASET:-}}"
 MODEL="${ENV_MODEL:-${MODEL:-}}"
 N="${ENV_N:-${N:-}}"
 N_CONCURRENT="${ENV_N_CONCURRENT:-${N_CONCURRENT:-}}"
+AGENT_SETUP_TIMEOUT_MULTIPLIER="${ENV_AGENT_SETUP_TIMEOUT_MULTIPLIER:-${AGENT_SETUP_TIMEOUT_MULTIPLIER:-}}"
 HARBOR_BIN="${ENV_HARBOR_BIN:-${HARBOR_BIN:-}}"
 TB_BIN="${ENV_TB_BIN:-${TB_BIN:-}}"
 
@@ -39,6 +41,7 @@ DATASET="${DATASET:-terminal-bench/terminal-bench-2}"
 LEADERBOARD_DATASET="${LEADERBOARD_DATASET:-terminal-bench-core==0.1.1}"
 N="${N:-1}"
 N_CONCURRENT="${N_CONCURRENT:-1}"
+AGENT_SETUP_TIMEOUT_MULTIPLIER="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-3}"
 HARBOR_BIN="${HARBOR_BIN:-harbor}"
 TB_BIN="${TB_BIN:-tb}"
 
@@ -62,6 +65,8 @@ Environment:
   LEADERBOARD_DATASET  Default: terminal-bench-core==0.1.1
   N                    Default: 1. Empty N means no -n flag.
   N_CONCURRENT         Default: 1.
+  AGENT_SETUP_TIMEOUT_MULTIPLIER
+                       Default: 3. Passed to Harbor agent setup timeout.
   HARBOR_BIN           Default: harbor. Can be "uvx harbor".
   TB_BIN               Default: tb. Can be "uvx terminal-bench".
 EOF
@@ -139,6 +144,7 @@ case "${1:-}" in
       --env-file .env.local \
       $redacted_openai_agent_env \
       --artifact /app/.agentplane-harbor \
+      --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT' \
       $(n_flag)" "$HARBOR_BIN run \
       -d '$DATASET' \
@@ -147,6 +153,7 @@ case "${1:-}" in
       --env-file .env.local \
       $openai_agent_env \
       --artifact /app/.agentplane-harbor \
+      --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT' \
       $(n_flag)"
     ;;
@@ -165,6 +172,7 @@ case "${1:-}" in
       --env-file .env.local \
       $redacted_openai_agent_env \
       --artifact /app/.agentplane-harbor \
+      --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT'" "$HARBOR_BIN run \
       -d '$DATASET' \
       --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
@@ -172,6 +180,7 @@ case "${1:-}" in
       --env-file .env.local \
       $openai_agent_env \
       --artifact /app/.agentplane-harbor \
+      --agent-setup-timeout-multiplier '$AGENT_SETUP_TIMEOUT_MULTIPLIER' \
       --n-concurrent '$N_CONCURRENT'"
     ;;
 
