@@ -11,7 +11,7 @@ if [[ -f .env.local ]]; then
   set +a
 fi
 
-MODEL="${MODEL:-openai/gpt-5.5}"
+MODEL="${MODEL:-openai/gpt-5-nano}"
 DATASET="${DATASET:-terminal-bench/terminal-bench-2}"
 LEADERBOARD_DATASET="${LEADERBOARD_DATASET:-terminal-bench-core==0.1.1}"
 N="${N:-1}"
@@ -34,7 +34,7 @@ Commands:
 
 Environment:
   OPENAI_API_KEY       Required for agentplane-codex.
-  MODEL                Default: openai/gpt-5.5
+  MODEL                Default: openai/gpt-5-nano
   DATASET              Default: terminal-bench/terminal-bench-2
   LEADERBOARD_DATASET  Default: terminal-bench-core==0.1.1
   N                    Default: 1. Empty N means no -n flag.
@@ -124,6 +124,12 @@ EOF
     ;;
 
   cost)
+    run_cmd ./scripts/estimate_cost.py --model gpt-5-nano --tasks 80 --profile low
+    run_cmd ./scripts/estimate_cost.py --model gpt-5-nano --tasks 80 --profile mid
+    run_cmd ./scripts/estimate_cost.py --model gpt-5-nano --tasks 80 --profile high
+    run_cmd ./scripts/estimate_cost.py --model gpt-5.4-nano --tasks 80 --profile low
+    run_cmd ./scripts/estimate_cost.py --model gpt-5.4-nano --tasks 80 --profile mid
+    run_cmd ./scripts/estimate_cost.py --model gpt-5.4-nano --tasks 80 --profile high
     run_cmd ./scripts/estimate_cost.py --model gpt-5.5 --tasks 80 --profile low
     run_cmd ./scripts/estimate_cost.py --model gpt-5.5 --tasks 80 --profile mid
     run_cmd ./scripts/estimate_cost.py --model gpt-5.5 --tasks 80 --profile high
@@ -139,4 +145,3 @@ EOF
     exit 1
     ;;
 esac
-

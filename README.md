@@ -66,7 +66,7 @@ For a Terminal-Bench leaderboard-shaped run using the legacy `tb` CLI:
 Estimate API cost before a full run:
 
 ```bash
-./scripts/estimate_cost.py --model gpt-5.5 --tasks 80 --profile mid
+./scripts/estimate_cost.py --model gpt-5-nano --tasks 80 --profile mid
 ```
 
 ## Run a smoke task
@@ -78,7 +78,7 @@ export OPENAI_API_KEY="..."
 harbor run \
   -d terminal-bench/terminal-bench-2 \
   --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
-  -m openai/gpt-5.5 \
+  -m openai/gpt-5-nano \
   -n 1
 ```
 
@@ -106,7 +106,7 @@ Example Harbor run shape:
 harbor run \
   -d terminal-bench/terminal-bench-2 \
   --agent-import-path agentplane_harbor_adapter.agentplane_codex:AgentPlaneCodexAgent \
-  -m openai/gpt-5.5
+  -m openai/gpt-5-nano
 ```
 
 If the active submission route still requires the legacy Terminal-Bench CLI,

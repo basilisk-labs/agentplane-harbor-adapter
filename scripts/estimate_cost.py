@@ -23,6 +23,8 @@ PRICES = {
     "gpt-5.5": Price(input_per_m=5.00, cached_input_per_m=0.50, output_per_m=30.00),
     "gpt-5.4": Price(input_per_m=2.50, cached_input_per_m=0.25, output_per_m=15.00),
     "gpt-5.4-mini": Price(input_per_m=0.75, cached_input_per_m=0.075, output_per_m=4.50),
+    "gpt-5.4-nano": Price(input_per_m=0.20, cached_input_per_m=0.02, output_per_m=1.25),
+    "gpt-5-nano": Price(input_per_m=0.05, cached_input_per_m=0.005, output_per_m=0.40),
 }
 
 PROFILES = {
@@ -46,7 +48,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Estimate OpenAI API cost for Terminal-Bench runs."
     )
-    parser.add_argument("--model", choices=PRICES.keys(), default="gpt-5.5")
+    parser.add_argument("--model", choices=PRICES.keys(), default="gpt-5-nano")
     parser.add_argument("--tasks", type=int, default=80)
     parser.add_argument("--profile", choices=PROFILES.keys(), default="mid")
     parser.add_argument("--input-tokens", type=int)
