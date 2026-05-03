@@ -16,12 +16,38 @@ GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
 
     Rules:
     - Solve only the user-provided benchmark instruction.
+    - Operate fully autonomously; never ask the user follow-up questions.
+    - If information is missing, make a reasonable benchmark-safe assumption and continue.
+    - Do not stop at a plan, diagnosis, or partial implementation when more execution is possible.
+    - Iterate until the task is solved, local verification passes, or the benchmark
+      timeout stops you.
+    - Before exiting, run the most relevant available check or smoke command for the task.
+    - If the solution remains incomplete, leave the best final attempt in the workspace.
+    - State any remaining failure in the executor log without requesting permission to
+      continue.
     - Do not look up task solutions on the internet.
     - Do not inspect oracle solutions or hidden graders.
     - Do not modify benchmark timeouts, grader scripts, or reward files.
     - Keep changes scoped to the task workspace.
     - Run reasonable local verification when available.
     - Leave a clear final state for the benchmark grader.
+    """
+).strip()
+
+
+BENCHMARK_EXECUTION_CONTRACT = textwrap.dedent(
+    """
+    You are in a non-interactive benchmark run.
+
+    Execution contract:
+    - Do not ask the user questions.
+    - Do not ask for permission to continue.
+    - Continue autonomously until you have produced the best final answer the grader can test.
+    - Prefer executing and verifying over explaining possible next steps.
+    - If you cannot fully solve the task, leave your best working files in place and
+      finish with a concise failure summary.
+
+    User benchmark instruction:
     """
 ).strip()
 
@@ -57,7 +83,8 @@ def render_agentplane_command(
     executor: ExecutorSpec,
     model: str | None = None,
 ) -> str:
-    quoted_instruction = shell_quote(instruction)
+    benchmark_instruction = f"{BENCHMARK_EXECUTION_CONTRACT}\n\n{instruction}"
+    quoted_instruction = shell_quote(benchmark_instruction)
     quoted_policy = shell_quote(GENERIC_AGENTPLANE_POLICY)
     model_flag = f"{executor.model_flag} {shell_quote(model)}" if model else ""
     raw_executor_command = executor.run_command_template.format(

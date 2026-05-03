@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agentplane_harbor_adapter.common import (
+    BENCHMARK_EXECUTION_CONTRACT,
     GENERIC_AGENTPLANE_POLICY,
     ExecutorSpec,
     policy_hash,
@@ -15,6 +16,14 @@ def test_policy_hash_is_stable_sha256() -> None:
     assert len(digest) == 64
     assert "oracle" in GENERIC_AGENTPLANE_POLICY.lower()
     assert "internet" in GENERIC_AGENTPLANE_POLICY.lower()
+    assert "never ask the user follow-up questions" in GENERIC_AGENTPLANE_POLICY
+    assert "benchmark timeout" in GENERIC_AGENTPLANE_POLICY
+
+
+def test_execution_contract_is_non_interactive() -> None:
+    assert "Do not ask the user questions" in BENCHMARK_EXECUTION_CONTRACT
+    assert "Do not ask for permission to continue" in BENCHMARK_EXECUTION_CONTRACT
+    assert "User benchmark instruction:" in BENCHMARK_EXECUTION_CONTRACT
 
 
 def test_render_agentplane_command_uses_generic_policy_and_executor() -> None:
@@ -33,7 +42,9 @@ def test_render_agentplane_command_uses_generic_policy_and_executor() -> None:
     assert "agentplane task new" in command
     assert "agentplane task plan approve" in command
     assert "agentplane verify" in command
-    assert "example run --model provider/model 'fix the task'" in command
+    assert "example run --model provider/model" in command
+    assert "fix the task" in command
+    assert "Do not ask for permission to continue" in command
     assert "executor-exit-code.txt" in command
     assert "executor.log" in command
     assert "Do not inspect oracle solutions" in command

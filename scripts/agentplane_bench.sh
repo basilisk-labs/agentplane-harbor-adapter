@@ -154,8 +154,7 @@ case "${1:-}" in
   full)
     require_openai_key
     if [[ -n "${N:-}" ]]; then
-      echo "Refusing full run while N is set to '$N'. Run with N= for all tasks." >&2
-      exit 1
+      echo "Ignoring N='$N' for explicit full run."
     fi
     redacted_openai_agent_env="--agent-env OPENAI_API_KEY=***"
     openai_agent_env="$(openai_agent_env_flag)"
