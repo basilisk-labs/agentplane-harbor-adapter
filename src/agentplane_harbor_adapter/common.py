@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .evaluator import EVALUATOR_SCRIPT
+
 DEFAULT_REPAIR_ATTEMPTS = 3
 
 GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
@@ -93,9 +95,11 @@ def render_agentplane_command(
     model_flag = f"{executor.model_flag} {shell_quote(model)}" if model else ""
     repair_instruction = shell_quote(
         "Previous attempt failed the local evaluator. Continue from the current "
-        "workspace state, read .agentplane-harbor/agentplane/evaluator-feedback.txt, "
-        "fix the recorded failure, run a relevant check, and leave the best final "
-        "state for the grader. Do not ask questions.\n\nOriginal benchmark instruction:\n"
+        "workspace state, read .agentplane-harbor/agentplane/evaluator-report.json "
+        "and .agentplane-harbor/agentplane/evaluator-feedback.txt, fix the recorded "
+        "failure, run a relevant check, and leave the best final state for the grader. "
+        "Do not ask questions. If the same failure repeats, change strategy instead "
+        "of making a narrow cosmetic edit.\n\nOriginal benchmark instruction:\n"
         f"{benchmark_instruction}"
     )
     initial_executor_command = executor.run_command_template.format(
@@ -108,12 +112,15 @@ def render_agentplane_command(
     )
     quoted_initial_executor_command = shell_quote(initial_executor_command)
     quoted_repair_executor_command = shell_quote(repair_executor_command)
+    quoted_evaluator_script = shell_quote(EVALUATOR_SCRIPT)
 
     return textwrap.dedent(
         f"""
         set -euo pipefail
         mkdir -p .agentplane-harbor/agentplane
         printf '%s\n' {quoted_policy} > AGENTS.md
+        printf '%s\n' {quoted_evaluator_script} > .agentplane-harbor/agentplane/evaluator.py
+        chmod +x .agentplane-harbor/agentplane/evaluator.py
 
         agentplane init --yes || true
         TASK_ID="$(agentplane task new \
@@ -138,138 +145,17 @@ def render_agentplane_command(
         run_evaluator() {{
           set +e
           local attempt="$1"
-          local feedback=".agentplane-harbor/agentplane/evaluator-feedback.txt"
-          local log=".agentplane-harbor/agentplane/evaluator-attempt-${{attempt}}.log"
-          : > "$feedback"
-          : > "$log"
-
-          if [ ! -f .agentplane-harbor/agentplane/executor-exit-code.txt ]; then
-            echo "FAIL: executor did not write an exit code." | tee -a "$feedback" "$log"
+          local python_bin
+          python_bin="$(command -v python3 || command -v python || true)"
+          if [ -z "$python_bin" ]; then
+            echo "FAIL: python is unavailable for local evaluator." \
+              > .agentplane-harbor/agentplane/evaluator-feedback.txt
             return 1
           fi
-
-          local executor_exit_code
-          executor_exit_code="$(cat .agentplane-harbor/agentplane/executor-exit-code.txt)"
-          if [ "$executor_exit_code" != "0" ]; then
-            echo "FAIL: executor exited with code $executor_exit_code." \
-              | tee -a "$feedback" "$log"
-            tail -n 80 .agentplane-harbor/agentplane/executor.log \
-              >> "$feedback" 2>/dev/null || true
-            return 1
-          fi
-
-          # Public, task-local checks only. Do not read or run hidden graders in /tests.
-          if [ -f main.tex ] && [ -f input.tex ] && [ -f synonyms.txt ]; then
-            set +e
-            pdflatex -interaction=nonstopmode main.tex > "$log" 2>&1
-            local latex_status="$?"
-            if [ "$latex_status" != "0" ]; then
-              echo "FAIL: pdflatex exited with code $latex_status." > "$feedback"
-              tail -n 120 "$log" >> "$feedback" || true
-              return 1
-            fi
-            if grep -q 'Overfull \\\\hbox' main.log 2>/dev/null; then
-              echo "FAIL: main.log still contains Overfull \\\\hbox warnings." \
-                > "$feedback"
-              grep -n 'Overfull \\\\hbox' main.log >> "$feedback" || true
-              return 1
-            fi
-            echo "PASS: pdflatex completed without Overfull hbox warnings." \
-              | tee -a "$feedback" "$log"
-            return 0
-          fi
-
-          if [ -f /app/deps/illum1.pov ]; then
-            if [ ! -x /usr/local/bin/povray ]; then
-              echo "FAIL: /usr/local/bin/povray is missing or not executable." \
-                > "$feedback"
-              return 1
-            fi
-            set +e
-            /usr/local/bin/povray +L/app/povray-2.2/povdoc/include \
-              +I/app/deps/illum1.pov +O/dev/null +P -V > "$log" 2>&1
-            local pov_status="$?"
-            if [ "$pov_status" != "0" ]; then
-              echo "FAIL: POV-Ray sanity render exited with code $pov_status." \
-                > "$feedback"
-              tail -n 120 "$log" >> "$feedback" || true
-              return 1
-            fi
-            echo "PASS: POV-Ray sanity render completed." | tee -a "$feedback" "$log"
-            return 0
-          fi
-
-          if [ -f /app/sim.c ] && [ -f /app/gates.txt ]; then
-            if [ ! -x /app/sim ]; then
-              set +e
-              cc /app/sim.c -O2 -o /app/sim > "$log" 2>&1
-              local cc_status="$?"
-              if [ "$cc_status" != "0" ]; then
-                echo "FAIL: could not compile /app/sim.c." > "$feedback"
-                tail -n 120 "$log" >> "$feedback" || true
-                return 1
-              fi
-            fi
-            local fib_a fib_b
-            fib_a="$(/app/sim 208 2>>"$log" || true)"
-            fib_b="$(/app/sim 20000 2>>"$log" || true)"
-            if [ "$fib_a" != "377" ] || [ "$fib_b" != "1407432322" ]; then
-              {{
-                echo "FAIL: gates.txt failed public examples."
-                echo "sim 208 => $fib_a, expected 377"
-                echo "sim 20000 => $fib_b, expected 1407432322"
-              }} > "$feedback"
-              return 1
-            fi
-            echo "PASS: gates.txt passed public examples." | tee -a "$feedback" "$log"
-            return 0
-          fi
-
-          if [ -f /app/doomgeneric_mips ]; then
-            if [ ! -f vm.js ]; then
-              echo "FAIL: vm.js is missing." > "$feedback"
-              return 1
-            fi
-            local vm_static_check
-            vm_static_check="$(grep -Eic \
-              'doomgeneric_mips|readUInt|DataView|syscall|register|opcode|pc|elf|writeFileSync' \
-              vm.js 2>/dev/null || true)"
-            if [ "$vm_static_check" -lt 6 ]; then
-              {{
-                echo "FAIL: vm.js does not look like a real MIPS/ELF interpreter."
-                echo "Expected code to load doomgeneric_mips and implement CPU/syscall/file"
-                echo "behavior."
-                echo "Static interpreter signal count: $vm_static_check"
-              }} > "$feedback"
-              return 1
-            fi
-            if grep -Eiq 'scaffold|stand[- ]?in|fake|placeholder|deterministic.*frame|gradient' \
-              vm.js 2>/dev/null; then
-              {{
-                echo "FAIL: vm.js appears to be a scaffold or fake frame generator."
-                echo "Implement a real interpreter path instead of fabricating a frame."
-              }} > "$feedback"
-              return 1
-            fi
-            set +e
-            timeout 45s node vm.js > "$log" 2>&1
-            local vm_status="$?"
-            if [ ! -f /tmp/frame.bmp ] && ! find /app -maxdepth 2 -type f \
-              \\( -name 'frame*.bmp' -o -name '*.bmp' \\) | grep -q .; then
-              {{
-                echo "FAIL: node vm.js did not produce a frame BMP during smoke run."
-                echo "node exit/timeout status: $vm_status"
-              }} > "$feedback"
-              tail -n 120 "$log" >> "$feedback" || true
-              return 1
-            fi
-            echo "PASS: vm.js produced a BMP frame candidate." | tee -a "$feedback" "$log"
-            return 0
-          fi
-
-          echo "INCONCLUSIVE: no task-specific public evaluator matched; executor exit was 0." \
-            | tee -a "$feedback" "$log"
-          return 0
+          "$python_bin" .agentplane-harbor/agentplane/evaluator.py \
+            --attempt "$attempt" \
+            --artifact-dir .agentplane-harbor/agentplane
+          return "$?"
         }}
 
         record_rework() {{
@@ -280,6 +166,9 @@ def render_agentplane_command(
           set +e
           observation="$(head -c 600 .agentplane-harbor/agentplane/evaluator-feedback.txt \
             2>/dev/null)"
+          cp .agentplane-harbor/agentplane/evaluator-report.json \
+            ".agentplane-harbor/agentplane/evaluator-report-rework-${{note//[^A-Za-z0-9]/_}}.json" \
+            2>/dev/null || true
           agentplane verify "$TASK_ID" \
             --rework \
             --by EVALUATOR \

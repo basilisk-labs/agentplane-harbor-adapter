@@ -8,6 +8,7 @@ from agentplane_harbor_adapter.common import (
     render_agentplane_command,
     render_proof_collection_command,
 )
+from agentplane_harbor_adapter.evaluator import EVALUATOR_SCRIPT
 
 
 def test_policy_hash_is_stable_sha256() -> None:
@@ -66,6 +67,7 @@ def test_render_agentplane_command_has_runner_evaluator_repair_loop() -> None:
     assert 'REPAIR_ATTEMPTS="${AGENTPLANE_REPAIR_ATTEMPTS:-3}"' in command
     assert 'for ATTEMPT in $(seq 1 "$REPAIR_ATTEMPTS")' in command
     assert "executor-attempt-${ATTEMPT}.log" in command
+    assert "evaluator-report.json" in command
     assert "evaluator-feedback.txt" in command
     assert "--rework" in command
     assert "Evaluator rejected attempt $ATTEMPT" in command
@@ -73,6 +75,19 @@ def test_render_agentplane_command_has_runner_evaluator_repair_loop() -> None:
     assert "Previous attempt failed the local evaluator" in command
     assert "does not look like a real MIPS/ELF interpreter" in command
     assert "appears to be a scaffold or fake frame generator" in command
+
+
+def test_embedded_evaluator_has_structured_task_specific_checks() -> None:
+    compile(EVALUATOR_SCRIPT, "embedded_evaluator.py", "exec")
+
+    assert "evaluator-report.json" in EVALUATOR_SCRIPT
+    assert "detect_task_type" in EVALUATOR_SCRIPT
+    assert "overfull-hbox" in EVALUATOR_SCRIPT
+    assert "build-pov-ray" in EVALUATOR_SCRIPT
+    assert "circuit-fibsqrt" in EVALUATOR_SCRIPT
+    assert "make-mips-interpreter" in EVALUATOR_SCRIPT
+    assert "deterministic fibsqrt public oracle cases" in EVALUATOR_SCRIPT
+    assert "Do not read or run hidden graders in /tests" in EVALUATOR_SCRIPT
 
 
 def test_render_proof_collection_command_records_integrity_flags() -> None:

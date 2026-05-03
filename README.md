@@ -188,6 +188,18 @@ AgentPlane-specific proof:
 - dirty-state prevention
 - overhead in wall time and artifacts
 
+The adapter also writes local evaluator artifacts for each AgentPlane attempt:
+
+- `.agentplane-harbor/agentplane/evaluator-report.json`
+- `.agentplane-harbor/agentplane/evaluator-feedback.txt`
+- `.agentplane-harbor/agentplane/evaluator-attempt-<n>.log`
+- `.agentplane-harbor/agentplane/executor-attempt-<n>.log`
+
+The evaluator uses only public task-local signals and treats the official
+Harbor verifier as the scoring truth. A failed local evaluator triggers
+AgentPlane rework, but the agent command exits successfully so Harbor can
+record a normal trial and let the official verifier assign reward.
+
 The minimum useful claim is not "AgentPlane always scores higher". It is:
 
 > With the same executor and model, AgentPlane preserves benchmark validity and
