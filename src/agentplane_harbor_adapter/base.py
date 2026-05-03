@@ -23,6 +23,8 @@ class AgentPlaneInstalledAgent(BaseInstalledAgent):  # type: ignore[misc,valid-t
         "if command -v node >/dev/null 2>&1 && "
         "node -e 'process.exit(Number(process.versions.node.split(`.`)[0]) >= 20 ? 0 : 1)'; "
         "then exit 0; fi; "
+        "apt-get update; "
+        "apt-get install -y ca-certificates curl gnupg git; "
         "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; "
         "apt-get install -y nodejs git ca-certificates"
     )
