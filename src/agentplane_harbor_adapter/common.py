@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+MAX_REPAIR_ATTEMPTS = 3
+
 GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
     """
     # AgentPlane Terminal-Bench Policy
@@ -19,6 +21,7 @@ GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
     - Operate fully autonomously; never ask the user follow-up questions.
     - If information is missing, make a reasonable benchmark-safe assumption and continue.
     - Do not stop at a plan, diagnosis, or partial implementation when more execution is possible.
+    - Treat local check failures as mandatory repair input.
     - Iterate until the task is solved, local verification passes, or the benchmark
       timeout stops you.
     - Before exiting, run the most relevant available check or smoke command for the task.
@@ -44,6 +47,7 @@ BENCHMARK_EXECUTION_CONTRACT = textwrap.dedent(
     - Do not ask for permission to continue.
     - Continue autonomously until you have produced the best final answer the grader can test.
     - Prefer executing and verifying over explaining possible next steps.
+    - Treat any evaluator failure feedback as mandatory repair input.
     - If you cannot fully solve the task, leave your best working files in place and
       finish with a concise failure summary.
 
@@ -87,19 +91,23 @@ def render_agentplane_command(
     quoted_instruction = shell_quote(benchmark_instruction)
     quoted_policy = shell_quote(GENERIC_AGENTPLANE_POLICY)
     model_flag = f"{executor.model_flag} {shell_quote(model)}" if model else ""
-    raw_executor_command = executor.run_command_template.format(
+    repair_instruction = shell_quote(
+        "Previous attempt failed the local evaluator. Continue from the current "
+        "workspace state, read .agentplane-harbor/agentplane/evaluator-feedback.txt, "
+        "fix the recorded failure, run a relevant check, and leave the best final "
+        "state for the grader. Do not ask questions.\n\nOriginal benchmark instruction:\n"
+        f"{benchmark_instruction}"
+    )
+    initial_executor_command = executor.run_command_template.format(
         instruction=quoted_instruction,
         model_flag=model_flag,
     )
-    executor_command = textwrap.dedent(
-        f"""
-        set +e
-        {raw_executor_command} > .agentplane-harbor/agentplane/executor.log 2>&1
-        EXECUTOR_EXIT_CODE="$?"
-        set -e
-        printf '%s\\n' "$EXECUTOR_EXIT_CODE" > .agentplane-harbor/agentplane/executor-exit-code.txt
-        """
-    ).strip()
+    repair_executor_command = executor.run_command_template.format(
+        instruction=repair_instruction,
+        model_flag=model_flag,
+    )
+    quoted_initial_executor_command = shell_quote(initial_executor_command)
+    quoted_repair_executor_command = shell_quote(repair_executor_command)
 
     return textwrap.dedent(
         f"""
@@ -127,16 +135,196 @@ def render_agentplane_command(
           --author CODER \
           --body "Start: Terminal-Bench run with generic AgentPlane policy." || true
 
-        {executor_command}
+        run_evaluator() {{
+          set +e
+          local attempt="$1"
+          local feedback=".agentplane-harbor/agentplane/evaluator-feedback.txt"
+          local log=".agentplane-harbor/agentplane/evaluator-attempt-${{attempt}}.log"
+          : > "$feedback"
+          : > "$log"
 
-        agentplane verify "$TASK_ID" \
-          --ok \
-          --by CODER \
-          --note "Benchmark executor finished; the official grader remains scoring truth." \
-          --local-only || true
+          if [ ! -f .agentplane-harbor/agentplane/executor-exit-code.txt ]; then
+            echo "FAIL: executor did not write an exit code." | tee -a "$feedback" "$log"
+            return 1
+          fi
+
+          local executor_exit_code
+          executor_exit_code="$(cat .agentplane-harbor/agentplane/executor-exit-code.txt)"
+          if [ "$executor_exit_code" != "0" ]; then
+            echo "FAIL: executor exited with code $executor_exit_code." \
+              | tee -a "$feedback" "$log"
+            tail -n 80 .agentplane-harbor/agentplane/executor.log \
+              >> "$feedback" 2>/dev/null || true
+            return 1
+          fi
+
+          # Public, task-local checks only. Do not read or run hidden graders in /tests.
+          if [ -f main.tex ] && [ -f input.tex ] && [ -f synonyms.txt ]; then
+            set +e
+            pdflatex -interaction=nonstopmode main.tex > "$log" 2>&1
+            local latex_status="$?"
+            if [ "$latex_status" != "0" ]; then
+              echo "FAIL: pdflatex exited with code $latex_status." > "$feedback"
+              tail -n 120 "$log" >> "$feedback" || true
+              return 1
+            fi
+            if grep -q 'Overfull \\\\hbox' main.log 2>/dev/null; then
+              echo "FAIL: main.log still contains Overfull \\\\hbox warnings." \
+                > "$feedback"
+              grep -n 'Overfull \\\\hbox' main.log >> "$feedback" || true
+              return 1
+            fi
+            echo "PASS: pdflatex completed without Overfull hbox warnings." \
+              | tee -a "$feedback" "$log"
+            return 0
+          fi
+
+          if [ -f /app/deps/illum1.pov ]; then
+            if [ ! -x /usr/local/bin/povray ]; then
+              echo "FAIL: /usr/local/bin/povray is missing or not executable." \
+                > "$feedback"
+              return 1
+            fi
+            set +e
+            /usr/local/bin/povray +L/app/povray-2.2/povdoc/include \
+              +I/app/deps/illum1.pov +O/dev/null +P -V > "$log" 2>&1
+            local pov_status="$?"
+            if [ "$pov_status" != "0" ]; then
+              echo "FAIL: POV-Ray sanity render exited with code $pov_status." \
+                > "$feedback"
+              tail -n 120 "$log" >> "$feedback" || true
+              return 1
+            fi
+            echo "PASS: POV-Ray sanity render completed." | tee -a "$feedback" "$log"
+            return 0
+          fi
+
+          if [ -f /app/sim.c ] && [ -f /app/gates.txt ]; then
+            if [ ! -x /app/sim ]; then
+              set +e
+              cc /app/sim.c -O2 -o /app/sim > "$log" 2>&1
+              local cc_status="$?"
+              if [ "$cc_status" != "0" ]; then
+                echo "FAIL: could not compile /app/sim.c." > "$feedback"
+                tail -n 120 "$log" >> "$feedback" || true
+                return 1
+              fi
+            fi
+            local fib_a fib_b
+            fib_a="$(/app/sim 208 2>>"$log" || true)"
+            fib_b="$(/app/sim 20000 2>>"$log" || true)"
+            if [ "$fib_a" != "377" ] || [ "$fib_b" != "1407432322" ]; then
+              {{
+                echo "FAIL: gates.txt failed public examples."
+                echo "sim 208 => $fib_a, expected 377"
+                echo "sim 20000 => $fib_b, expected 1407432322"
+              }} > "$feedback"
+              return 1
+            fi
+            echo "PASS: gates.txt passed public examples." | tee -a "$feedback" "$log"
+            return 0
+          fi
+
+          if [ -f /app/doomgeneric_mips ]; then
+            if [ ! -f vm.js ]; then
+              echo "FAIL: vm.js is missing." > "$feedback"
+              return 1
+            fi
+            set +e
+            timeout 45s node vm.js > "$log" 2>&1
+            local vm_status="$?"
+            if [ ! -f /tmp/frame.bmp ] && ! find /app -maxdepth 2 -type f \
+              \\( -name 'frame*.bmp' -o -name '*.bmp' \\) | grep -q .; then
+              {{
+                echo "FAIL: node vm.js did not produce a frame BMP during smoke run."
+                echo "node exit/timeout status: $vm_status"
+              }} > "$feedback"
+              tail -n 120 "$log" >> "$feedback" || true
+              return 1
+            fi
+            echo "PASS: vm.js produced a BMP frame candidate." | tee -a "$feedback" "$log"
+            return 0
+          fi
+
+          echo "INCONCLUSIVE: no task-specific public evaluator matched; executor exit was 0." \
+            | tee -a "$feedback" "$log"
+          return 0
+        }}
+
+        record_rework() {{
+          local note="$1"
+          local impact="$2"
+          local resolution="$3"
+          local observation
+          set +e
+          observation="$(head -c 600 .agentplane-harbor/agentplane/evaluator-feedback.txt \
+            2>/dev/null)"
+          agentplane verify "$TASK_ID" \
+            --rework \
+            --by EVALUATOR \
+            --note "$note" \
+            --observation "$observation" \
+            --impact "$impact" \
+            --resolution "$resolution" \
+            --local-only
+          set -e
+          return 0
+        }}
+
+        RUNNER_EXIT_CODE=0
+        EVALUATOR_EXIT_CODE=1
+        for ATTEMPT in $(seq 1 {MAX_REPAIR_ATTEMPTS}); do
+          if [ "$ATTEMPT" = "1" ]; then
+            EXECUTOR_COMMAND={quoted_initial_executor_command}
+          else
+            EXECUTOR_COMMAND={quoted_repair_executor_command}
+          fi
+
+          set +e
+          {{
+            echo "=== AgentPlane runner attempt $ATTEMPT ==="
+            date -u
+            eval "$EXECUTOR_COMMAND"
+          }} > ".agentplane-harbor/agentplane/executor-attempt-${{ATTEMPT}}.log" 2>&1
+          RUNNER_EXIT_CODE="$?"
+          set -e
+          cp ".agentplane-harbor/agentplane/executor-attempt-${{ATTEMPT}}.log" \
+            .agentplane-harbor/agentplane/executor.log
+          printf '%s\\n' "$RUNNER_EXIT_CODE" \
+            > .agentplane-harbor/agentplane/executor-exit-code.txt
+
+          set +e
+          run_evaluator "$ATTEMPT"
+          EVALUATOR_EXIT_CODE="$?"
+          set -e
+          printf '%s\\n' "$EVALUATOR_EXIT_CODE" \
+            > .agentplane-harbor/agentplane/evaluator-exit-code.txt
+
+          if [ "$EVALUATOR_EXIT_CODE" = "0" ]; then
+            agentplane verify "$TASK_ID" \
+              --ok \
+              --by CODER \
+              --note "Evaluator accepted attempt $ATTEMPT; official grader remains scoring truth." \
+              --local-only || true
+            break
+          fi
+
+          record_rework \
+            "Evaluator rejected attempt $ATTEMPT." \
+            "Runner must repair the current workspace before final grading." \
+            "Retrying with evaluator feedback."
+        done
+
+        if [ "$EVALUATOR_EXIT_CODE" != "0" ]; then
+          record_rework \
+            "Evaluator still rejected the final attempt; leaving best workspace state." \
+            "Official grader will score the best available failed state." \
+            "Repair attempts exhausted."
+        fi
         agentplane task show "$TASK_ID" > .agentplane-harbor/agentplane/task-show.txt 2>&1 || true
         agentplane task verify-show "$TASK_ID" \
           > .agentplane-harbor/agentplane/verify-show.txt 2>&1 || true
+        exit 0
         """
     ).strip()
 
