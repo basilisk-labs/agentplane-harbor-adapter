@@ -33,6 +33,42 @@ uv venv
 uv pip install -e ".[dev]"
 ```
 
+## One-command local path
+
+Copy the local environment template and add your API key:
+
+```bash
+cp .env.example .env.local
+$EDITOR .env.local
+```
+
+Then run:
+
+```bash
+./scripts/agentplane_bench.sh setup
+./scripts/agentplane_bench.sh preflight
+./scripts/agentplane_bench.sh oracle-smoke
+./scripts/agentplane_bench.sh smoke
+```
+
+For a full Harbor run:
+
+```bash
+N= ./scripts/agentplane_bench.sh full
+```
+
+For a Terminal-Bench leaderboard-shaped run using the legacy `tb` CLI:
+
+```bash
+./scripts/agentplane_bench.sh leaderboard-tb
+```
+
+Estimate API cost before a full run:
+
+```bash
+./scripts/estimate_cost.py --model gpt-5.5 --tasks 80 --profile mid
+```
+
 ## Run a smoke task
 
 Codex:
@@ -82,6 +118,9 @@ tb run \
   --model <model> \
   --dataset terminal-bench-core==0.1.1
 ```
+
+See [docs/cost.md](docs/cost.md) before running a full dataset. A full run can
+cost hundreds of dollars on frontier models if tasks require many turns.
 
 ## Proof bundle
 
@@ -143,4 +182,3 @@ The minimum useful claim is not "AgentPlane always scores higher". It is:
 > With the same executor and model, AgentPlane preserves benchmark validity and
 > adds auditable task lifecycle evidence, reproducible artifacts, and clearer
 > failure analysis.
-
