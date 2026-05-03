@@ -63,6 +63,7 @@ def test_render_agentplane_command_has_runner_evaluator_repair_loop() -> None:
     command = render_agentplane_command("fix the task", executor, "provider/model")
 
     assert "run_evaluator()" in command
+    assert "for ATTEMPT in $(seq 1 5)" in command
     assert "executor-attempt-${ATTEMPT}.log" in command
     assert "evaluator-feedback.txt" in command
     assert "--rework" in command

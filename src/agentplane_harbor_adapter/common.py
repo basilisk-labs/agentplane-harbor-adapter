@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-MAX_REPAIR_ATTEMPTS = 3
+MAX_REPAIR_ATTEMPTS = 5
 
 GENERIC_AGENTPLANE_POLICY = textwrap.dedent(
     """
